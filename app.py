@@ -281,7 +281,7 @@ async def generate_flashcards_simple(
 # ===============================
 if __name__ == "__main__":
     uvicorn.run(
-        "main:app",  # assuming this file is named main.py
+        "app:app",  # assuming this file is named main.py
         host="0.0.0.0",
         port=8000,
         reload=True
