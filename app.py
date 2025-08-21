@@ -54,7 +54,12 @@ def generate_flashcards_from_chunk(chunk, num_cards=2):
         print("⚠️ Error:", e)
         return []
 
-# ---- API endpoint ----
+# ---- Root Endpoint ----
+@app.get("/")
+def home():
+    return {"message": "🚀 Flashcard Generator API is Live! Use /flashcards to get flashcards."}
+
+# ---- Flashcards Endpoint ----
 @app.get("/flashcards")
 def get_flashcards():
     pdf_path = "NOTES UNIT-4 ANN.pdf"  # must exist in your repo or Render disk
