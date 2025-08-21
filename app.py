@@ -1,17 +1,16 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import random
+import random, os, json
 from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_groq import ChatGroq
-import os
 
 app = FastAPI()
 
-# Allow CORS (frontend access)
+# Allow CORS (frontend can access)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # ⚠️ restrict to your frontend domain in production
+    allow_origins=["*"],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -20,7 +19,7 @@ app.add_middleware(
 # Groq setup
 llm = ChatGroq(
     temperature=0.3,
-    groq_api_key=os.getenv("GROQ_API_KEY"),   # use Render environment variable
+    groq_api_key=os.getenv("GROQ_API_KEY"),  # set in Render
     model_name="meta-llama/llama-4-scout-17b-16e-instruct"
 )
 
@@ -39,7 +38,7 @@ def get_chunks(text, chunk_size=800, overlap=100):
 def generate_flashcards_from_chunk(chunk, num_cards=2):
     prompt = f"""
     Create {num_cards} flashcards (question-answer pairs) from the following text.
-    Format strictly as JSON list like:
+    Return STRICTLY valid JSON in this format:
     [
       {{"question": "Q1?", "answer": "A1"}},
       {{"question": "Q2?", "answer": "A2"}}
@@ -49,9 +48,9 @@ def generate_flashcards_from_chunk(chunk, num_cards=2):
     """
     try:
         response = llm.invoke(prompt)
-        return eval(response.content)
+        return json.loads(response.content.strip())
     except Exception as e:
-        print("⚠️ Error:", e)
+        print("⚠️ Error parsing LLM output:", e)
         return []
 
 # ---- Root Endpoint ----
@@ -62,7 +61,7 @@ def home():
 # ---- Flashcards Endpoint ----
 @app.get("/flashcards")
 def get_flashcards():
-    pdf_path = "NOTES UNIT-4 ANN.pdf"  # must exist in your repo or Render disk
+    pdf_path = "NOTES UNIT-4 ANN.pdf"  # <-- upload this to your repo before deploy
     if not os.path.exists(pdf_path):
         return {"error": f"File not found: {pdf_path}"}
 
@@ -70,10 +69,11 @@ def get_flashcards():
     chunks = get_chunks(text)
 
     flashcards = []
-    for chunk in chunks[:5]:
+    for chunk in chunks[:5]:  # only first 5 chunks for speed
         flashcards.extend(generate_flashcards_from_chunk(chunk, num_cards=2))
 
-    # pick only 5 flashcards
-    flashcards = random.sample(flashcards, min(5, len(flashcards)))
+    # pick only 5 flashcards max
+    if flashcards:
+        flashcards = random.sample(flashcards, min(5, len(flashcards)))
 
     return {"flashcards": flashcards}
