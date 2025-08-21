@@ -1,98 +1,74 @@
-import os
 from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
+import random
 from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import FAISS
-from langchain.chains import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferMemory
 from langchain_groq import ChatGroq
-from langchain.embeddings import HuggingFaceEmbeddings
+import os
 
-app = FastAPI(title="IPC PDF QA with Groq LLM")
+app = FastAPI()
 
-# ===============================
-# Groq API setup
-# ===============================
+# Allow CORS (frontend access)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # ⚠️ restrict to your frontend domain in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Groq setup
 llm = ChatGroq(
-    temperature=0,
-    groq_api_key="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",  # 🔑 Replace with your key
+    temperature=0.3,
+    groq_api_key=os.getenv("GROQ_API_KEY"),   # use Render environment variable
     model_name="meta-llama/llama-4-scout-17b-16e-instruct"
 )
 
-SAVE_PATH = "pdf_faiss_index"
-PDF_PATH = "IPC.pdf"
-
-# ===============================
-# Helper Functions
-# ===============================
-def get_pdf_text(pdf_path: str):
+# ---- Utility functions ----
+def get_pdf_text(pdf_path):
     text = ""
-    pdf_reader = PdfReader(pdf_path)
-    for page in pdf_reader.pages:
-        page_text = page.extract_text()
-        if page_text:
-            text += page_text
+    reader = PdfReader(pdf_path)
+    for page in reader.pages:
+        text += page.extract_text() or ""
     return text
 
-def get_text_chunks(text: str):
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=20
-    )
+def get_chunks(text, chunk_size=800, overlap=100):
+    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=overlap)
     return splitter.split_text(text)
 
-def get_vector_store(text_chunks, save_path=SAVE_PATH):
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
-    vector_store.save_local(save_path)
-    return vector_store
-
-def load_vector_store(save_path=SAVE_PATH):
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    return FAISS.load_local(save_path, embeddings, allow_dangerous_deserialization=True)
-
-def get_conversational_chain(vector_store):
-    memory = ConversationBufferMemory(
-        memory_key="chat_history",
-        return_messages=True
-    )
-    conversation_chain = ConversationalRetrievalChain.from_llm(
-        llm=llm,
-        retriever=vector_store.as_retriever(),
-        memory=memory
-    )
-    return conversation_chain
-
-# ===============================
-# Pydantic Models
-# ===============================
-class QuestionRequest(BaseModel):
-    question: str
-
-# ===============================
-# Load or create FAISS index at startup
-# ===============================
-if os.path.exists(SAVE_PATH):
-    vector_store = load_vector_store(SAVE_PATH)
-    print("📂 Loaded existing FAISS index")
-else:
-    raw_text = get_pdf_text(PDF_PATH)
-    chunks = get_text_chunks(raw_text)
-    vector_store = get_vector_store(chunks)
-    print("✅ FAISS index created from IPC.pdf")
-
-conversation = get_conversational_chain(vector_store)
-
-# ===============================
-# FastAPI Route
-# ===============================
-@app.post("/ask")
-async def ask_question(request: QuestionRequest):
+def generate_flashcards_from_chunk(chunk, num_cards=2):
+    prompt = f"""
+    Create {num_cards} flashcards (question-answer pairs) from the following text.
+    Format strictly as JSON list like:
+    [
+      {{"question": "Q1?", "answer": "A1"}},
+      {{"question": "Q2?", "answer": "A2"}}
+    ]
+    Text:
+    {chunk}
     """
-    Ask a question about the IPC.pdf.
-    """
-    response = conversation({"question": request.question})
-    chat_history = response['chat_history']
-    last_reply = chat_history[-1].content if chat_history else "No response"
-    return {"answer": last_reply}
+    try:
+        response = llm.invoke(prompt)
+        return eval(response.content)
+    except Exception as e:
+        print("⚠️ Error:", e)
+        return []
+
+# ---- API endpoint ----
+@app.get("/flashcards")
+def get_flashcards():
+    pdf_path = "NOTES UNIT-4 ANN.pdf"  # must exist in your repo or Render disk
+    if not os.path.exists(pdf_path):
+        return {"error": f"File not found: {pdf_path}"}
+
+    text = get_pdf_text(pdf_path)
+    chunks = get_chunks(text)
+
+    flashcards = []
+    for chunk in chunks[:5]:
+        flashcards.extend(generate_flashcards_from_chunk(chunk, num_cards=2))
+
+    # pick only 5 flashcards
+    flashcards = random.sample(flashcards, min(5, len(flashcards)))
+
+    return {"flashcards": flashcards}
